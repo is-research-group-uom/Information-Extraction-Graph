@@ -1,0 +1,13 @@
+{
+  "comments": 0,
+  "successful_Validations": 2,
+  "failed_Validations": 1,
+  "validation_errors": [
+    {
+      "Comment Index": 0,
+      "Error Type": "validation",
+      "Error Message": "1 validation error for ValidateGraphDocument\n  Value error, Invalid Relationship:\nShould be Position -> Objecy Arguments [type=value_error, input_value={'nodes': [ValidateNode(i....\", 'comment_index': 0}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.11/v/value_error"
+    }
+  ],
+  "quality_metrics": {}
+}

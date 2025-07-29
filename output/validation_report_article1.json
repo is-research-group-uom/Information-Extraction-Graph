@@ -1,0 +1,88 @@
+{
+  "comments": 0,
+  "successful_Validations": 0,
+  "failed_Validations": 16,
+  "validation_errors": [
+    {
+      "Comment Index": 0,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 1,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 2,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 3,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 4,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 5,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 6,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 7,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 8,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 9,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 10,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 11,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 12,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 13,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 14,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    },
+    {
+      "Comment Index": 15,
+      "Error Type": "validation",
+      "Error Message": "'Issue' is not a valid AllowedNodeType"
+    }
+  ],
+  "quality_metrics": {}
+}

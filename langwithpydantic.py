@@ -1,0 +1,366 @@
+import re
+from langchain_aws import ChatBedrock
+from langchain_experimental.graph_transformers import LLMGraphTransformer
+from langchain.docstore.document import Document
+from credentials import get_bedrock_client
+from pyvis.network import Network
+from pydantic import BaseModel, Field, model_validator, field_validator
+from typing import List, Dict, Any, Optional
+from enum import Enum
+import json
+
+
+class AllowedNodeType(str, Enum):
+    ARTICLE = "Article"
+    POSITION = "Position"
+    SUPPORTED_ARGUMENTS = "Supported_arguments"
+    OBJECT_ARGUMENTS = "Object_arguments"
+
+
+class AllowedRelationshipType(str, Enum):
+    HAS = "HAS"
+    SUPPORTED_BECAUSE = "SUPPORTED_BECAUSE"
+    IS_NOT_SUPPORTED_BECAUSE = "IS_NOT_SUPPORTED_BECAUSE"
+
+
+class ValidateNode(BaseModel):
+    id: str = Field(..., min_length=1)
+    type: AllowedNodeType
+    properties: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('id')
+    def validate_for_greek(id):
+        if is_all_english(id):
+            raise ValueError(f"Node Should be in greek. {id} is not greek!")
+        return id
+
+
+class ValidationRelationship(BaseModel):
+    source_id: str
+    target_id: str
+    type: AllowedRelationshipType
+    properties: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ValidateGraphDocument(BaseModel):
+    nodes: List[ValidateNode]
+    relationships: List[ValidationRelationship]
+
+    @model_validator(mode='after')
+    def validate_structure(self):
+        nodes = self.nodes
+        relationships = self.relationships
+
+        ids = {node.id for node in nodes}
+
+        for relationship in relationships:
+            if relationship.source_id not in ids:
+                raise ValueError(f"Relationship Source {relationship.source_id} not found in ids")
+            if relationship.target_id not in ids:
+                raise ValueError(f"Relationshup Target {relationship.target_id} not found in ids")
+
+            self.validate_relationships(nodes,relationships)
+
+        return self
+
+    @staticmethod
+    def validate_relationships(nodes, relationships):
+        types = {node.id: node.type for node in nodes}
+
+        for relationship in relationships:
+            source_type = types[relationship.source_id]
+            target_type = types[relationship.target_id]
+            type = relationship.type
+
+            if type == AllowedRelationshipType.HAS:
+                if source_type != AllowedNodeType.ARTICLE or target_type != AllowedNodeType.POSITION:
+                    raise ValueError(f"Invalid RelationShip:\nShould be Article -> Position")
+            elif type == AllowedRelationshipType.SUPPORTED_BECAUSE:
+                if source_type != AllowedNodeType.POSITION or target_type != AllowedNodeType.SUPPORTED_ARGUMENTS:
+                    raise ValueError(f"Invalid RelationShip:\nShould be Position -> Suggested Arguments")
+            elif type == AllowedRelationshipType.IS_NOT_SUPPORTED_BECAUSE:
+                if source_type != AllowedNodeType.POSITION or target_type != AllowedNodeType.OBJECT_ARGUMENTS:
+                    raise ValueError(f"Invalid Relationship:\nShould be Position -> Object Arguments")
+
+
+class ValidationReport(BaseModel):
+    comments: int
+    successful_Validations: int
+    failed_Validations: int
+    validation_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    quality_metrics: Dict[str, Any] = Field(default_factory=dict)
+
+    def add_error(self, comment_index: int, err: str, err_type: str = "validation"):
+        self.validation_errors.append({
+            "Comment Index": comment_index,
+            "Error Type": err_type,
+            "Error Message": err,
+        })
+
+    def calculate_metrics(self, validated_graphs: List[ValidateGraphDocument]):
+        if not validated_graphs:
+            return
+
+        total_nodes = sum(len(graph.nodes) for graph in validated_graphs)
+        total_relationships = sum(len(graph.relationship) for graph in validated_graphs)
+
+        node_type_counts = {}
+        rel_type_counts = {}
+
+        for graph in validated_graphs:
+            for node in graph.nodes:
+                node_type_counts[node.type.value] = node_type_counts.get(node.type.value, 0) + 1
+            for rel in graph.relationships:
+                rel_type_counts[rel.type.value] = rel_type_counts.get(rel.type.value, 0) + 1
+
+        self.quality_metrics = {
+            "total_nodes": total_nodes,
+            "total_relationships": total_relationships,
+            "avg_nodes_per_comment": total_nodes / len(validated_graphs) if validated_graphs else 0,
+            "avg_relationships_per_comment": total_relationships / len(validated_graphs) if validated_graphs else 0,
+            "node_type_distribution": node_type_counts,
+            "relationship_type_distribution": rel_type_counts,
+            "connectivity_ratio": total_relationships / total_nodes if total_nodes > 0 else 0
+        }
+
+
+class GraphValidator:
+    def __init__(self):
+        self.report = ValidationReport(comments=0, successful_Validations=0, failed_Validations=0)
+
+    def validate_single_graph(self, graph_doc, comment_index: int = None, source_text: str = None) -> Optional[ValidateGraphDocument]:
+        """Validate a single graph document"""
+        try:
+            # Convert nodes
+            validated_nodes = []
+            for node in graph_doc.nodes:
+                validated_node = ValidateNode(
+                    id=node.id,
+                    type=AllowedNodeType(node.type),
+                    properties=getattr(node, 'properties', {})
+                )
+                validated_nodes.append(validated_node)
+
+            # Convert relationships
+            validated_relationships = []
+            for rel in graph_doc.relationships:
+                validated_rel = ValidationRelationship(
+                    source_id=rel.source.id,
+                    target_id=rel.target.id,
+                    type=AllowedRelationshipType(rel.type),
+                    properties=getattr(rel, 'properties', {})
+                )
+                validated_relationships.append(validated_rel)
+
+            # Create validated graph document
+            validated_graph = ValidateGraphDocument(
+                nodes=validated_nodes,
+                relationships=validated_relationships,
+                source_text=source_text,
+                comment_index=comment_index
+            )
+
+            self.report.successful_Validations += 1
+            return validated_graph
+
+        except Exception as e:
+            self.report.failed_Validations += 1
+            self.report.add_error(comment_index or 0, str(e))
+            print(f"Validation error for comment {comment_index}: {e}")
+            return None
+
+    def get_report(self) -> ValidationReport:
+        return self.report
+
+    def save_report(self, filename: str):
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(self.report.dict(), f, ensure_ascii=False, indent=2)
+
+def is_all_english(text):
+    english_pattern = re.compile(r'^[a-zA-Z0-9\s.,\'!?()"-]+$')
+    return bool(english_pattern.match(text))
+
+
+def merge_graph_documents(issue_docs, graph_docs):
+    """Merge multiple graph documents into one, based on node types and semantic similarity"""
+
+    # Collect all nodes first
+    merged_nodes = {}
+    merged_relationships = []
+    all_nodes = []
+    all_relationships = []
+
+    for issue_doc in issue_docs:
+        all_nodes.append(issue_doc.nodes)
+        all_relationships.append(issue_doc.relationships)
+
+    for graph_doc in graph_docs:
+        all_nodes.append(graph_doc.nodes)
+        all_relationships.append(graph_doc.relationships)
+
+    count = 0
+    for node in all_nodes:
+
+        name = node.id
+        if node.id == name:
+            count += 1
+
+        if count == 1:
+            merged_nodes[node.id] = node
+
+        count = 0
+
+    for rel in all_relationships:
+        source_node = merged_nodes.get(rel.source.id, rel.source)
+        target_node = merged_nodes.get(rel.target.id, rel.target)
+
+        new_rel = type(rel)(
+            source=source_node,
+            target=target_node,
+            type=rel.type
+        )
+
+        merged_relationships.append(new_rel)
+
+    first_graph = graph_docs[0]
+
+    graph_dict = {
+        'nodes': merged_nodes,
+        'relationships': merged_relationships
+    }
+
+    # Add any additional fields that exist in the original graph document
+    for attr in ['source', 'page_content', 'metadata']:
+        if hasattr(first_graph, attr):
+            graph_dict[attr] = getattr(first_graph, attr)
+
+    merged_graph = type(first_graph)(**graph_dict)
+
+    return merged_graph
+
+
+def position_argument_extraction(issue_nodes, comments, index):
+    # It's recommended to specify the region, otherwise it will be inferred from your environment
+    bedrock_runtime = get_bedrock_client()
+
+    standard_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    llm = ChatBedrock(
+        client=bedrock_runtime,
+        model_id=standard_model_id,
+        model_kwargs={"temperature": 0, "max_tokens": 131072},
+    )
+
+    issues = []
+    for doc in issue_nodes:
+        for node in doc.nodes:
+            if node.type == "Issue":
+                issues.append(node.id)
+
+    # Option 1
+    transformer = LLMGraphTransformer(
+        llm=llm,
+        allowed_nodes=["Issue", "Position", "Supported_Arguments", "Object_Arguments"],
+        allowed_relationships=["has_position", "supported_because", "is_not_supported_because"],
+        additional_instructions=f'''
+        Issue List:
+        {issues}
+        
+        <Format>:
+          <Issue> has_position <Position>
+          <Position> supported because <Supporting_Arguments>
+          <Position> objected because <Objecting_Arguments>
+
+        <Descriptions>:
+        Issue: <The issue that the position belong to>
+        Position: <The point of view expressed by the user in the comment. It should respond to the point of the Issue/Article. A comment doesn't mean that will have a position inside>
+        Supported_Arguments: <How the user supports his position.>
+        Object_Arguments: <How the user Objects to the position>
+
+        <IMPORTANT DIRECTION RULES>:
+        - Issue HAS_POSITION Position (Issue -> Position)
+        - Position SUPPORTED_BECAUSE Supporting_Arguments (Position -> Supporting_Arguments)  
+        - Position IS_NOT_SUPPORTED_BECAUSE Objecting_Arguments (Position -> Objecting_Arguments)
+        - NEVER reverse these directions!
+
+        1. All extracted text must be written in Greek.
+        2. An issue can have a lot of positions.
+        3. A Position could have a lot of arguments. But also none.
+        4. If the type of node is Issue then the name/id of the node should be exactly as it is inside the Issue List'''
+    )
+
+    all_graph_docs = []
+    for idx, comment in enumerate(comments):
+        text = f"""
+        Σχολιο {idx + 1}
+        {comment}"""
+        print(idx + 1, '/', len(comments))
+
+        documents = [Document(page_content=text)]
+        graph_documents = transformer.convert_to_graph_documents(documents)
+        all_graph_docs.extend(graph_documents)
+    #     for graph_doc in graph_documents:
+    #         validated = validator.validate_single_graph(graph_doc, idx, text)
+    #         if validated:
+    #             all_graph_docs.extend(graph_documents)
+
+    merged_graph = merge_graph_documents(issue_nodes, all_graph_docs)
+    print("Merged Graph", merged_graph)
+
+    # Create a Pyvis network object
+    # Create Pyvis network with better layout
+    net = Network(notebook=True, cdn_resources="remote", directed=True, height='100vh')
+    net.force_atlas_2based()
+
+    # Add nodes with color coding
+    if all_graph_docs:
+        for graph_document in all_graph_docs:
+            # Add nodes with color coding
+            for node in graph_document.nodes:
+                label = node.id[:40] + '...' if len(node.id) > 40 else node.id
+                if node.type == "Position":
+                    color = "#FFCC00"
+                elif node.type == "Supported_arguments":
+                    color = "#7BE141"
+                elif node.type == "Object_arguments":
+                    color = "#FF9999"
+                elif node.type == "Issue":
+                    color = "#97C2FC"
+                net.add_node(node.id, label=label, title=node.id, color=color)
+
+            # Add edges with arrow
+            for rel in graph_document.relationships:
+                net.add_edge(rel.source.id, rel.target.id, label=rel.type, arrows='to')
+
+    # Optional advanced styling
+    net.set_options("""
+    var options = {
+      "nodes": {
+        "shape": "box",
+        "font": {
+          "face": "arial",
+          "size": 14,
+          "multi": "html"
+        }
+      },
+      "edges": {
+        "arrows": {
+          "to": {
+            "enabled": true
+          }
+        },
+        "smooth": {
+          "enabled": true
+        }
+      },
+      "physics": {
+        "enabled": true,
+        "barnesHut": {
+          "gravitationalConstant": -8000,
+          "springLength": 250
+        }
+      }
+    }
+    """)
+
+    # Show
+    net.show(f"output/article{index}.html")
