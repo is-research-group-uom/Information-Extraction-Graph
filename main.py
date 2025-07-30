@@ -6,7 +6,7 @@ from relevance.relevance_claude import relevance_claude
 from langwithpydantic import position_argument_extraction
 from issue import issue_extraction
 
-url = "https://www.opengov.gr/digitalandbrief/?p=3131"  # Replace with the target URL
+url = "https://www.opengov.gr/ypepth/?p=6501"  # Replace with the target URL
 post_contents = scrape_post_urls(url)
 if post_contents:
     for i, content in enumerate(post_contents, 1):
@@ -29,10 +29,10 @@ for i, content in enumerate(post_contents):
 
         posts.append(dict)
 
-print(f'Scrapted Content posts: {posts}')
+# print(f'Scrapted Content posts: {posts}')
 
 
-dataframe1 = pd.read_excel('data/egov_comments.xls')
+dataframe1 = pd.read_excel('data/ypepth_comments_104.xls')
 
 comments_per_article = dataframe1.values.tolist()
 article_comment = []
@@ -63,7 +63,7 @@ for article in article_comment:
     comments = article['Comments']
     print(f'Comments1: {comments}')
     print(f'Length1: {len(comments)}')
-    for comment in comments:
+    for comment in comments[:30]:
         response = relevance_claude(article_with_title, comment)
 
         score = int(response)

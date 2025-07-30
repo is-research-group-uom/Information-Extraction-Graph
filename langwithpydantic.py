@@ -182,61 +182,54 @@ def is_all_english(text):
 
 
 def merge_graph_documents(issue_docs, graph_docs):
-    """Merge multiple graph documents into one, based on node types and semantic similarity"""
-
-    # Collect all nodes first
+    """
+    Merge multiple graph documents into a single graph document by deduplicating
+    nodes and relationships.
+    """
     merged_nodes = {}
-    merged_relationships = []
-    all_nodes = []
-    all_relationships = []
+    merged_relationships = set()
 
-    for issue_doc in issue_docs:
-        all_nodes.append(issue_doc.nodes)
-        all_relationships.append(issue_doc.relationships)
-
-    for graph_doc in graph_docs:
-        all_nodes.append(graph_doc.nodes)
-        all_relationships.append(graph_doc.relationships)
-
-    count = 0
-    for node in all_nodes:
-
-        name = node.id
-        if node.id == name:
-            count += 1
-
-        if count == 1:
+    def add_node(node):
+        if node.id not in merged_nodes:
             merged_nodes[node.id] = node
 
-        count = 0
+    def add_relationship(rel):
+        key = (rel.source.id, rel.target.id, rel.type)
+        merged_relationships.add((key, json.dumps(rel.properties, ensure_ascii=False)))
 
-    for rel in all_relationships:
-        source_node = merged_nodes.get(rel.source.id, rel.source)
-        target_node = merged_nodes.get(rel.target.id, rel.target)
+    # Add all nodes and relationships from issue_docs (e.g. Article -> Issue)
+    for doc in issue_docs:
+        for node in doc.nodes:
+            add_node(node)
+        for rel in doc.relationships:
+            add_relationship(rel)
 
-        new_rel = type(rel)(
-            source=source_node,
-            target=target_node,
-            type=rel.type
-        )
+    # Add all nodes and relationships from graph_docs (e.g. Issue -> Position -> Arguments)
+    for doc in graph_docs:
+        for node in doc.nodes:
+            add_node(node)
+        for rel in doc.relationships:
+            add_relationship(rel)
 
-        merged_relationships.append(new_rel)
+    # Convert to list
+    merged_node_list = list(merged_nodes.values())
+    merged_rel_list = []
+    for (src_tgt_type, props_json) in merged_relationships:
+        src_id, tgt_id, rel_type = src_tgt_type
+        props = json.loads(props_json)
+        merged_rel_list.append({
+            'source_id': src_id,
+            'target_id': tgt_id,
+            'type': rel_type,
+            'properties': props
+        })
 
-    first_graph = graph_docs[0]
-
-    graph_dict = {
-        'nodes': merged_nodes,
-        'relationships': merged_relationships
+    merge_graph = {
+        'nodes': merged_node_list,
+        'relationships': merged_rel_list
     }
 
-    # Add any additional fields that exist in the original graph document
-    for attr in ['source', 'page_content', 'metadata']:
-        if hasattr(first_graph, attr):
-            graph_dict[attr] = getattr(first_graph, attr)
-
-    merged_graph = type(first_graph)(**graph_dict)
-
-    return merged_graph
+    return merge_graph
 
 
 def position_argument_extraction(issue_nodes, comments, index):
@@ -289,7 +282,9 @@ def position_argument_extraction(issue_nodes, comments, index):
     )
 
     all_graph_docs = []
-    for idx, comment in enumerate(comments):
+    temp_parts = []
+
+    for idx, comment in enumerate(comments[:30]):
         text = f"""
         Σχολιο {idx + 1}
         {comment}"""
@@ -298,12 +293,49 @@ def position_argument_extraction(issue_nodes, comments, index):
         documents = [Document(page_content=text)]
         graph_documents = transformer.convert_to_graph_documents(documents)
         all_graph_docs.extend(graph_documents)
-    #     for graph_doc in graph_documents:
-    #         validated = validator.validate_single_graph(graph_doc, idx, text)
-    #         if validated:
-    #             all_graph_docs.extend(graph_documents)
+
+        comment_section = [f"Comment: {comment}"]
+
+        for graph_document in graph_documents:
+            positions = [node.id for node in graph_document.nodes if node.type == 'Position']
+            Sup_arguments = [node.id for node in graph_document.nodes if node.type == 'Supported_arguments']
+            Obj_arguments = [node.id for node in graph_document.nodes if node.type == 'Object_arguments']
+
+            # Show Position -> Arguments relationships
+            if positions and Sup_arguments:
+                comment_section.append("Position -> Supported Arguments:")
+                for p_idx, pos in enumerate(positions):
+                    args_list = " | ".join(Sup_arguments)  # Join all arguments
+                    comment_section.append(f"{p_idx}.  {pos} -> {args_list}")
+            elif positions:
+                comment_section.append("Positions (no Supported arguments):")
+                comment_section.extend([f"  {pos}" for pos in positions])
+            elif Sup_arguments:
+                comment_section.append("Arguments (no positions):")
+                comment_section.extend([f"  {arg}" for arg in Sup_arguments])
+
+            if positions and Obj_arguments:
+                comment_section.append("Position -> Object Arguments:")
+                for p_idx, pos in enumerate(positions):
+                    args_list = " | ".join(Obj_arguments)  # Join all arguments
+                    comment_section.append(f"{p_idx}.  {pos} -> {args_list}")
+            elif positions:
+                comment_section.append("Positions (no Object arguments):")
+                comment_section.extend([f"  {pos}" for pos in positions])
+            elif Obj_arguments:
+                comment_section.append("Arguments (no positions):")
+                comment_section.extend([f"  {arg}" for arg in Obj_arguments])
+
+            comment_section.append("-" * 50)
+            temp_parts.append("\n".join(comment_section))
+
+        temp = "\n".join(temp_parts)
+
+    with open("output/response.txt", "w", encoding="utf-8") as f:
+        f.write(temp)
 
     merged_graph = merge_graph_documents(issue_nodes, all_graph_docs)
+    all_graph_docs =[merged_graph]
     print("Merged Graph", merged_graph)
 
     # Create a Pyvis network object
@@ -315,7 +347,7 @@ def position_argument_extraction(issue_nodes, comments, index):
     if all_graph_docs:
         for graph_document in all_graph_docs:
             # Add nodes with color coding
-            for node in graph_document.nodes:
+            for node in graph_document['nodes']:
                 label = node.id[:40] + '...' if len(node.id) > 40 else node.id
                 if node.type == "Position":
                     color = "#FFCC00"
@@ -325,11 +357,13 @@ def position_argument_extraction(issue_nodes, comments, index):
                     color = "#FF9999"
                 elif node.type == "Issue":
                     color = "#97C2FC"
+                elif node.type == "Article":
+                    color = "#00F8FF"
                 net.add_node(node.id, label=label, title=node.id, color=color)
 
             # Add edges with arrow
-            for rel in graph_document.relationships:
-                net.add_edge(rel.source.id, rel.target.id, label=rel.type, arrows='to')
+            for rel in graph_document['relationships']:
+                net.add_edge(rel["source_id"], rel["target_id"], label=rel["type"], arrows='to')
 
     # Optional advanced styling
     net.set_options("""
