@@ -6,7 +6,7 @@ from relevance.relevance_claude import relevance_claude
 from langwithpydantic import position_argument_extraction
 from issue import issue_extraction
 
-url = "https://www.opengov.gr/ypepth/?p=6501"  # Replace with the target URL
+url = "https://www.opengov.gr/ypepth/?p=6501"
 post_contents = scrape_post_urls(url)
 if post_contents:
     for i, content in enumerate(post_contents, 1):

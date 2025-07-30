@@ -7,7 +7,7 @@ from pyvis.network import Network
 
 
 def issue_extraction(article):
-    # It's recommended to specify the region, otherwise it will be inferred from your environment
+
     bedrock_runtime = get_bedrock_client()
 
     standard_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
